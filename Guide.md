@@ -303,4 +303,97 @@ TLS指紋の偽装: curl_cffi の impersonate を使う（上記コード）。
 
 アクセス頻度の制限: asyncio.Semaphore で同時アクセス数を絞り、必要に応じて await asyncio.sleep(1) などで人間らしい「間」を作る。
 
+## 12. `aiohttp` の主要なオプション（パラメータ）一覧
+
+`aiohttp` で通信を行う際、`requests` と同様に様々なオプションを指定できます。大きく分けて**「セッション全体に対する設定」**と**「リクエストごとの設定」**の2箇所で指定します。
+
+### ① `ClientSession` 作成時のオプション（セッション全体の設定）
+すべてのリクエストに共通するベース設定を行います。ここで設定したヘッダーやCookieは、そのセッションで行う全通信に自動で付与されます。
+
+| パラメータ | 役割 | 設定例 |
+| :--- | :--- | :--- |
+| **`base_url`** | 共通の基準URL。以降のリクエストは相対パスで書けます。 | `base_url="https://api.example.com"` |
+| **`headers`** | 共通のカスタムヘッダー（User-Agentなど）。 | `headers={"User-Agent": "MyBot/1.0"}` |
+| **`cookies`** | 共通のCookie。ログイン状態の維持などに使用します。 | `cookies={"session_id": "12345"}` |
+| **`timeout`** | 全体のタイムアウト時間。**※ `aiohttp.ClientTimeout` を使います。** | `timeout=aiohttp.ClientTimeout(total=30)` |
+| **`connector`** | 接続プールやSSL設定などを細かく制御します。 | `connector=aiohttp.TCPConnector(limit=50)` |
+| **`auth`** | Basic認証などの共通の認証情報。 | `auth=aiohttp.BasicAuth("user", "pass")` |
+
+---
+
+### ② `session.get()` や `session.post()` のオプション（リクエストごとの設定）
+その都度の通信で必要なデータや、セッションの設定を上書きしたい場合に使用します。
+
+| パラメータ | 役割 | 設定例 |
+| :--- | :--- | :--- |
+| **`params`** | URLのクエリパラメータ（`?key=value`）を辞書で指定。 | `params={"page": 2, "sort": "desc"}` |
+| **`data`** | POSTリクエストで送信するフォームデータなど。 | `data={"username": "test", "pw": "123"}` |
+| **`json`** | POSTリクエストでJSONデータを送信（自動変換されます）。 | `json={"status": "active"}` |
+| **`headers`** | この通信だけの個別ヘッダー（セッション設定と結合されます）。 | `headers={"Authorization": "Bearer token"}` |
+| **`proxy`** | 経由するプロキシサーバーのURL。 | `proxy="http://proxy.example.com:8080"` |
+| **`ssl`** | SSL証明書の検証有無。**※ `requests` の `verify=False` に相当。** | `ssl=False` |
+| **`allow_redirects`** | リダイレクトを自動で追従するかどうか（デフォルトは `True`）。 | `allow_redirects=False` |
+| **`timeout`** | このリクエスト固有のタイムアウト設定。 | `timeout=aiohttp.ClientTimeout(total=10)` |
+
+---
+
+### ③ `aiohttp` オプションのフル活用コード例
+
+`requests` との違いで特につまずきやすい**「タイムアウトの設定方法」**と**「プロキシ・SSLの指定」**を含めた実践的な書き方です。
+
+```python
+import asyncio
+import aiohttp
+
+async def main():
+    # 1. セッション全体の設定
+    # requestsのように単なる数値ではなく、ClientTimeoutオブジェクトを使います
+    timeout_settings = aiohttp.ClientTimeout(total=30, connect=10)
+    
+    # 接続プールの制限（同時に開くコネクション数）などを設定
+    connector = aiohttp.TCPConnector(limit=100)
+    
+    # 共通ヘッダー
+    base_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "ja,en-US;q=0.9"
+    }
+
+    # セッションの初期化
+    async with aiohttp.ClientSession(
+        headers=base_headers, 
+        timeout=timeout_settings,
+        connector=connector
+    ) as session:
+        
+        # 2. 個別リクエストの設定
+        target_url = "[https://httpbin.org/get](https://httpbin.org/get)"
+        query_params = {"search": "python", "page": "1"}
+        
+        try:
+            # params, proxy, ssl などのオプションを指定してGET
+            async with session.get(
+                target_url, 
+                params=query_params,
+                proxy="[http://your-proxy-address.com:8080](http://your-proxy-address.com:8080)", # プロキシを通す場合
+                ssl=False # SSL証明書のエラーを無視する場合
+            ) as response:
+                
+                print(f"ステータス: {response.status}")
+                
+                # JSONとしてレスポンスを取得（requestsの .json() に相当）
+                data = await response.json()
+                print("取得データ:", data["args"]) # {"search": "python", "page": "1"}
+                
+        except asyncio.TimeoutError:
+            print("エラー: タイムアウトしました")
+        except aiohttp.ClientError as e:
+            print(f"通信エラー: {e}")
+
+if __name__ == "__main__":
+    import sys
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())
+
 プロキシの利用（ローテーション）: 同一IPからの大量アクセスによるBANを防ぐため、商用のローテーティング・プロキシ（リクエスト毎にIPが変わるサービス）を session.get(url, proxies={"http": "...", "https": "..."}) のように設定する。
